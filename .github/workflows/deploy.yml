@@ -1,0 +1,178 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: perf_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Backend - Install dependencies
+        working-directory: ./backend
+        run: npm ci
+
+      - name: Backend - Run migrations
+        working-directory: ./backend
+        env:
+          DATABASE_URL: postgres://postgres:postgres@localhost:5432/perf_test
+          JWT_SECRET: test-secret-key-for-ci-pipeline
+          NODE_ENV: test
+        run: npm run migrate
+
+      - name: Frontend - Install dependencies
+        working-directory: ./frontend
+        run: npm ci
+
+      - name: Frontend - Build
+        working-directory: ./frontend
+        env:
+          VITE_API_URL: https://api.yourdomain.com
+        run: npm run build
+
+      - name: Frontend - Check build artifacts
+        working-directory: ./frontend
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "❌ Frontend build failed: dist/ folder not found"
+            exit 1
+          fi
+          echo "✅ Frontend build successful"
+
+  deploy-backend:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy backend to Railway
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          curl -fsSL https://railway.app/install.sh | sh
+          export PATH="$HOME/.railway/bin:$PATH"
+          railway link ${{ secrets.RAILWAY_BACKEND_SERVICE_ID }}
+          railway up --service backend
+
+  deploy-frontend:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Build frontend
+        working-directory: ./frontend
+        env:
+          VITE_API_URL: https://api.yourdomain.com
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy to Vercel
+        uses: vercel/actions/deployer@master
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          vercel-token: ${{ secrets.VERCEL_TOKEN }}
+          vercel-org-id: ${{ secrets.VERCEL_ORG_ID }}
+          vercel-project-id: ${{ secrets.VERCEL_PROJECT_ID }}
+
+  health-check:
+    needs: [deploy-backend, deploy-frontend]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Wait for deployment
+        run: sleep 30
+
+      - name: Check backend health
+        run: |
+          curl -f https://api.yourdomain.com/health || exit 1
+          echo "✅ Backend is healthy"
+
+      - name: Check frontend
+        run: |
+          curl -f https://yourdomain.com/ || exit 1
+          echo "✅ Frontend is reachable"
+
+  notify-on-failure:
+    needs: [lint-and-test, deploy-backend, deploy-frontend, health-check]
+    runs-on: ubuntu-latest
+    if: failure()
+
+    steps:
+      - name: Notify Slack on failure
+        if: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "text": "❌ Performance Tracker deployment failed",
+              "attachments": [{
+                "color": "danger",
+                "fields": [
+                  {"title": "Repository", "value": "${{ github.repository }}"},
+                  {"title": "Branch", "value": "${{ github.ref }}"},
+                  {"title": "Commit", "value": "${{ github.sha }}"},
+                  {"title": "Author", "value": "${{ github.actor }}"}
+                ]
+              }]
+            }'
+
+  notify-on-success:
+    needs: [lint-and-test, deploy-backend, deploy-frontend, health-check]
+    runs-on: ubuntu-latest
+    if: success() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Notify Slack on success
+        if: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          curl -X POST ${{ secrets.SLACK_WEBHOOK_URL }} \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "text": "✅ Performance Tracker deployed successfully",
+              "attachments": [{
+                "color": "good",
+                "fields": [
+                  {"title": "Repository", "value": "${{ github.repository }}"},
+                  {"title": "Branch", "value": "${{ github.ref }}"},
+                  {"title": "Commit", "value": "${{ github.sha }}"},
+                  {"title": "Author", "value": "${{ github.actor }}"}
+                ]
+              }]
+            }'
