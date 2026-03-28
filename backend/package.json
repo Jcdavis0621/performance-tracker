@@ -4,6 +4,8 @@
   "description": "Performance Tracker API",
   "main": "src/server.js",
   "scripts": {
+    "preinstall": "cd backend && npm install && cd ../frontend && npm install",
+    "prestart": "cd backend && npm run start",
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "migrate": "node src/migrate.js"

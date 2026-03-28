@@ -20,7 +20,7 @@ git init
 git add .
 git commit -m "Initial commit: Performance Tracker app"
 git branch -M main
-git remote add origin https://github.com/YOUR_USERNAME/performance-tracker.git
+git remote add origin https://github.com/Jcdavis0621/performance-tracker.git
 git push -u origin main
 ```
 
