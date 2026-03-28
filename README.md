@@ -216,3 +216,4 @@ For issues or questions, check:
 2. Both backend and frontend are running
 3. Database is created and migrated
 4. Ports 5000 and 5173 are available
+# performance-tracker
